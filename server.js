@@ -11,7 +11,7 @@ if (!MEMORY_API_BASE) {
   process.exit(1);
 }
 
-// CRITICAL: Enable CORS for ALL origins with all methods
+// Enable CORS
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -19,13 +19,21 @@ app.use(cors({
   credentials: false
 }));
 
-// Handle preflight requests
 app.options('*', cors());
-
 app.use(express.json());
 
 console.log("🚀 MCP Memory Server starting...");
 console.log(`📊 Memory API: ${MEMORY_API_BASE}`);
+
+// Helper to get base URL (force HTTPS on Zeabur)
+function getBaseUrl(req) {
+  const host = req.get('host');
+  // Force HTTPS for Zeabur deployments
+  if (host.includes('zeabur.app')) {
+    return `https://${host}`;
+  }
+  return `${req.protocol}://${host}`;
+}
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -36,10 +44,7 @@ app.get('/', (req, res) => {
     endpoints: {
       manifest: '/manifest.json',
       openapi: '/openapi.json',
-      health: '/health',
-      api_summary: '/api/summary/:userId',
-      api_search: '/api/search/:userId',
-      api_memories: '/api/memories/:userId'
+      health: '/health'
     }
   });
 });
@@ -49,19 +54,17 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'lobechat-memory',
-    memoryApi: MEMORY_API_BASE,
-    cors: 'enabled'
+    memoryApi: MEMORY_API_BASE
   });
 });
 
 // LobeChat Plugin Manifest
 app.get('/manifest.json', (req, res) => {
-  // Add extra CORS headers just to be sure
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', '*');
   
-  const baseUrl = req.protocol + '://' + req.get('host');
+  const baseUrl = getBaseUrl(req);
   
   res.json({
     schema_version: '1.0.0',
@@ -86,7 +89,7 @@ app.get('/manifest.json', (req, res) => {
 app.get('/openapi.json', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   
-  const baseUrl = req.protocol + '://' + req.get('host');
+  const baseUrl = getBaseUrl(req);
   
   res.json({
     openapi: '3.0.0',
@@ -114,7 +117,7 @@ app.get('/openapi.json', (req, res) => {
               schema: {
                 type: 'string'
               },
-              description: 'User ID (e.g., kgwoo2d727xo)'
+              description: 'User ID'
             }
           ],
           responses: {
@@ -162,20 +165,7 @@ app.get('/openapi.json', (req, res) => {
           ],
           responses: {
             '200': {
-              description: 'Search results',
-              content: {
-                'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      success: { type: 'boolean' },
-                      query: { type: 'string' },
-                      count: { type: 'integer' },
-                      memories: { type: 'array' }
-                    }
-                  }
-                }
-              }
+              description: 'Search results'
             }
           }
         }
@@ -200,8 +190,7 @@ app.get('/openapi.json', (req, res) => {
               schema: {
                 type: 'integer',
                 default: 20
-              },
-              description: 'Maximum number of memories to return'
+              }
             }
           ],
           responses: {
@@ -318,6 +307,5 @@ app.get('/api/memories/:userId', async (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Memory Server running on port ${PORT}`);
   console.log(`🌐 CORS enabled for all origins`);
-  console.log(`📄 Manifest: http://localhost:${PORT}/manifest.json`);
-  console.log(`📋 OpenAPI: http://localhost:${PORT}/openapi.json`);
+  console.log(`📄 Manifest: https://your-domain/manifest.json`);
 });
