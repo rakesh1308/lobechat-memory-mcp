@@ -1,214 +1,226 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import express from "express";
-import cors from "cors";
-import fetch from "node-fetch";
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
 
-const MEMORY_API_BASE = process.env.MEMORY_API_BASE;
+const app = express();
 const PORT = process.env.PORT || 3000;
+const MEMORY_API_BASE = process.env.MEMORY_API_BASE;
 
 if (!MEMORY_API_BASE) {
-  console.error("❌ Missing MEMORY_API_BASE");
+  console.error("❌ Missing MEMORY_API_BASE env var");
   process.exit(1);
 }
 
-const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Create MCP server
-const mcpServer = new Server(
-  {
-    name: "lobechat-memory",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
-
-// Define tools
-mcpServer.setRequestHandler("tools/list", async () => {
-  return {
-    tools: [
-      {
-        name: "get_user_memories",
-        description: "Get recent memories for a user",
-        inputSchema: {
-          type: "object",
-          properties: {
-            user_id: {
-              type: "string",
-              description: "User ID to get memories for",
-            },
-            limit: {
-              type: "number",
-              description: "Max memories to return (default 20)",
-              default: 20,
-            },
-          },
-          required: ["user_id"],
-        },
-      },
-      {
-        name: "search_memories",
-        description: "Search user memories by keyword",
-        inputSchema: {
-          type: "object",
-          properties: {
-            user_id: {
-              type: "string",
-              description: "User ID",
-            },
-            query: {
-              type: "string",
-              description: "Search query",
-            },
-          },
-          required: ["user_id", "query"],
-        },
-      },
-      {
-        name: "get_memory_summary",
-        description: "Get formatted summary of user's memories",
-        inputSchema: {
-          type: "object",
-          properties: {
-            user_id: {
-              type: "string",
-              description: "User ID",
-            },
-          },
-          required: ["user_id"],
-        },
-      },
-    ],
-  };
-});
-
-// Implement tool calls
-mcpServer.setRequestHandler("tools/call", async (request) => {
-  const { name, arguments: args } = request.params;
-
-  try {
-    if (name === "get_user_memories") {
-      const { user_id, limit = 20 } = args;
-      const response = await fetch(
-        `${MEMORY_API_BASE}/api/recent?user_id=${user_id}&limit=${limit}`
-      );
-      const data = await response.json();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(data.memories, null, 2),
-          },
-        ],
-      };
-    }
-
-    if (name === "search_memories") {
-      const { user_id, query } = args;
-      const response = await fetch(
-        `${MEMORY_API_BASE}/api/search?q=${encodeURIComponent(query)}&user_id=${user_id}`
-      );
-      const data = await response.json();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(data.memories, null, 2),
-          },
-        ],
-      };
-    }
-
-    if (name === "get_memory_summary") {
-      const { user_id } = args;
-      const response = await fetch(
-        `${MEMORY_API_BASE}/api/recent?user_id=${user_id}&limit=50`
-      );
-      const data = await response.json();
-
-      // Build summary
-      const byCategory = {};
-      for (const mem of data.memories || []) {
-        if (!byCategory[mem.category]) {
-          byCategory[mem.category] = [];
-        }
-        byCategory[mem.category].push(mem.content);
-      }
-
-      const summary = `User Memory Summary for ${user_id}:
-
-${Object.entries(byCategory)
-  .map(([cat, facts]) => 
-    `${cat.toUpperCase()}:\n${facts.map(f => `- ${f}`).join('\n')}`
-  )
-  .join('\n\n')}
-
-Total memories: ${data.count || 0}`;
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: summary,
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Unknown tool: ${name}`);
-  } catch (error) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Error: ${error.message}`,
-        },
-      ],
-      isError: true,
-    };
-  }
-});
+console.log("🚀 Memory Bridge API starting...");
+console.log(`📊 Memory API: ${MEMORY_API_BASE}`);
 
 // Health check
-app.get("/health", (req, res) => {
+app.get('/health', (req, res) => {
   res.json({
-    status: "healthy",
-    service: "lobechat-memory-mcp",
-    transport: "SSE",
-    memoryApi: MEMORY_API_BASE,
+    status: 'healthy',
+    service: 'lobechat-memory-bridge',
+    version: '1.0.0',
+    memoryApi: MEMORY_API_BASE
   });
 });
 
-// SSE endpoint for MCP
-app.get("/sse", async (req, res) => {
-  console.log("📡 New SSE connection");
-  
-  const transport = new SSEServerTransport("/message", res);
-  await mcpServer.connect(transport);
-  
-  // Handle client disconnect
-  req.on("close", () => {
-    console.log("📡 SSE connection closed");
-  });
+// Get user memories
+app.get('/api/memories/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const limit = req.query.limit || 20;
+
+    console.log(`📥 Fetching memories for user: ${userId}`);
+
+    const response = await fetch(
+      `${MEMORY_API_BASE}/api/recent?user_id=${userId}&limit=${limit}`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Memory API returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    res.json({
+      success: true,
+      userId,
+      count: data.count || 0,
+      memories: data.memories || []
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching memories:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
 });
 
-// Message endpoint for MCP
-app.post("/message", async (req, res) => {
-  // This is handled by the SSE transport
-  res.status(200).end();
+// Search memories
+app.get('/api/search/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { q } = req.query;
+
+    if (!q) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing query parameter: q' 
+      });
+    }
+
+    console.log(`🔍 Searching memories for user ${userId}: "${q}"`);
+
+    const response = await fetch(
+      `${MEMORY_API_BASE}/api/search?q=${encodeURIComponent(q)}&user_id=${userId}`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Memory API returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    res.json({
+      success: true,
+      userId,
+      query: q,
+      count: data.count || 0,
+      memories: data.memories || []
+    });
+
+  } catch (error) {
+    console.error('❌ Error searching memories:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Remote MCP Server running on port ${PORT}`);
-  console.log(`📡 SSE endpoint: http://localhost:${PORT}/sse`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
-  console.log(`💾 Memory API: ${MEMORY_API_BASE}`);
+// Get memory summary (formatted for LLM)
+app.get('/api/summary/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const limit = req.query.limit || 50;
+
+    console.log(`📊 Generating summary for user: ${userId}`);
+
+    const response = await fetch(
+      `${MEMORY_API_BASE}/api/recent?user_id=${userId}&limit=${limit}`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Memory API returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const memories = data.memories || [];
+
+    // Group by category
+    const byCategory = {};
+    for (const mem of memories) {
+      if (!byCategory[mem.category]) {
+        byCategory[mem.category] = [];
+      }
+      byCategory[mem.category].push(mem.content);
+    }
+
+    // Build formatted summary
+    const summaryText = Object.entries(byCategory)
+      .map(([cat, facts]) => {
+        const categoryName = cat.toUpperCase();
+        const factsList = facts.map(f => `- ${f}`).join('\n');
+        return `${categoryName}:\n${factsList}`;
+      })
+      .join('\n\n');
+
+    res.json({
+      success: true,
+      userId,
+      totalMemories: memories.length,
+      byCategory,
+      summary: summaryText,
+      formattedForLLM: `User Memory Summary:\n\n${summaryText}\n\nTotal memories: ${memories.length}`
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating summary:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// Get memories by category
+app.get('/api/category/:userId/:category', async (req, res) => {
+  try {
+    const { userId, category } = req.params;
+
+    console.log(`📂 Fetching ${category} memories for user: ${userId}`);
+
+    const response = await fetch(
+      `${MEMORY_API_BASE}/api/recent?user_id=${userId}&limit=100`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Memory API returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const filtered = (data.memories || []).filter(m => m.category === category);
+    
+    res.json({
+      success: true,
+      userId,
+      category,
+      count: filtered.length,
+      memories: filtered
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching category memories:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+// Test endpoint for debugging
+app.get('/api/test', async (req, res) => {
+  try {
+    const healthCheck = await fetch(`${MEMORY_API_BASE}/health`);
+    const healthData = await healthCheck.json();
+    
+    res.json({
+      success: true,
+      bridge: 'working',
+      memoryApiHealth: healthData
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      bridge: 'working',
+      memoryApiHealth: 'failed',
+      error: error.message
+    });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Memory Bridge API running on port ${PORT}`);
+  console.log(`🌐 Health: http://localhost:${PORT}/health`);
+  console.log(`📖 API Documentation:`);
+  console.log(`   GET  /api/memories/:userId?limit=20`);
+  console.log(`   GET  /api/search/:userId?q=query`);
+  console.log(`   GET  /api/summary/:userId`);
+  console.log(`   GET  /api/category/:userId/:category`);
+  console.log(`   GET  /api/test`);
 });
